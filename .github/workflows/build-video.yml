@@ -133,7 +133,7 @@ jobs:
     name: Render MP4
     runs-on: ubuntu-latest
     needs: download-and-validate
-    timeout-minutes: 180
+    timeout-minutes: 360
     steps:
       - name: Install FFmpeg
         run: |
