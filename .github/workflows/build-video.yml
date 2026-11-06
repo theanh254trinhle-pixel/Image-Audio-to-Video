@@ -35,7 +35,6 @@ jobs:
       audio_duration: ${{ steps.prepare.outputs.audio_duration }}
       chunk_count: ${{ steps.prepare.outputs.chunk_count }}
       render_matrix: ${{ steps.prepare.outputs.render_matrix }}
-      publish_matrix: ${{ steps.prepare.outputs.publish_matrix }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -178,32 +177,129 @@ jobs:
               for i, p in enumerate(files, start=1)
           ]
 
-          # Create groups of at most nine artifacts per publisher job.
-          publish_items = []
-          for start in range(0, len(render_items), 9):
-              publish_items.append({
-                  "group": f"{(start // 9) + 1:02d}",
-                  "files": render_items[start:start + 9],
+          import shutil
+
+          # Bundle four 30-minute audio segments per artifact. Each render job
+          # downloads only its bundle, not the entire 17+ hour source audio.
+          group_root = Path("chunk-groups")
+          group_root.mkdir(exist_ok=True)
+          grouped_items = []
+          for i, source in enumerate(files, start=1):
+              group = f"{((i - 1) // 4) + 1:02d}"
+              target_dir = group_root / f"group-{group}"
+              target_dir.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, target_dir / source.name)
+              grouped_items.append({
+                  "id": f"{i:02d}",
+                  "file": source.name,
+                  "group": group,
               })
+
+          group_count = (len(files) + 3) // 4
+          if group_count > 9:
+              raise SystemExit(
+                  f"This workflow currently supports up to 36 half-hour chunks (18 hours); found {len(files)} chunks."
+              )
 
           outputs = {
               "audio_duration": os.environ["AUDIO_DURATION"],
               "chunk_count": str(len(files)),
-              "render_matrix": json.dumps({"include": render_items}, separators=(",", ":")),
-              "publish_matrix": json.dumps({"include": publish_items}, separators=(",", ":")),
+              "group_count": str(group_count),
+              "render_matrix": json.dumps({"include": grouped_items}, separators=(",", ":")),
           }
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
               for key, value in outputs.items():
                   f.write(f"{key}={value}\n")
           print(f"Created {len(files)} audio chunks.")
-          print(f"Created {len(publish_items)} artifact-publisher groups.")
+          print(f"Created {group_count} audio bundles, with at most four chunks in each.")
           PY
 
-      - name: Upload all split audio chunks for publishing
+      - name: Upload audio bundle 01
+        if: fromJSON(steps.prepare.outputs.group_count) >= 1
         uses: actions/upload-artifact@v4
         with:
-          name: audio-chunks
-          path: chunks/
+          name: audio-01
+          path: chunk-groups/group-01/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload audio bundle 02
+        if: fromJSON(steps.prepare.outputs.group_count) >= 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-02
+          path: chunk-groups/group-02/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload audio bundle 03
+        if: fromJSON(steps.prepare.outputs.group_count) >= 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-03
+          path: chunk-groups/group-03/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload audio bundle 04
+        if: fromJSON(steps.prepare.outputs.group_count) >= 4
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-04
+          path: chunk-groups/group-04/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload audio bundle 05
+        if: fromJSON(steps.prepare.outputs.group_count) >= 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-05
+          path: chunk-groups/group-05/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload audio bundle 06
+        if: fromJSON(steps.prepare.outputs.group_count) >= 6
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-06
+          path: chunk-groups/group-06/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload audio bundle 07
+        if: fromJSON(steps.prepare.outputs.group_count) >= 7
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-07
+          path: chunk-groups/group-07/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload audio bundle 08
+        if: fromJSON(steps.prepare.outputs.group_count) >= 8
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-08
+          path: chunk-groups/group-08/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload audio bundle 09
+        if: fromJSON(steps.prepare.outputs.group_count) >= 9
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-09
+          path: chunk-groups/group-09/
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
@@ -217,69 +313,10 @@ jobs:
           retention-days: 1
           compression-level: 0
 
-  publish-audio:
-    name: Publish audio artifacts ${{ matrix.group }}
-    runs-on: ubuntu-latest
-    needs: prepare
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      max-parallel: 4
-      matrix: ${{ fromJSON(needs.prepare.outputs.publish_matrix) }}
-    steps:
-      - name: Download split audio files
-        uses: actions/download-artifact@v4
-        with:
-          name: audio-chunks
-          path: chunks
-
-      - name: Publish one artifact per audio chunk
-        env:
-          CHUNK_FILES: ${{ toJSON(matrix.files) }}
-        run: |
-          set -euo pipefail
-          mkdir -p artifact-uploader
-          cd artifact-uploader
-          npm init -y >/dev/null 2>&1
-          npm install --no-save --no-package-lock @actions/artifact@6.3.1
-          node <<'NODE'
-          const fs = require("node:fs");
-          const path = require("node:path");
-          async function main() {
-            // @actions/artifact v6 is ESM; load it with dynamic import from this CommonJS script.
-            const { DefaultArtifactClient } = await import("@actions/artifact");
-            const chunks = JSON.parse(process.env.CHUNK_FILES || "[]");
-            if (!Array.isArray(chunks) || chunks.length === 0 || chunks.length > 9) {
-              throw new Error("Unexpected audio chunk group size: " + chunks.length);
-            }
-
-            const client = new DefaultArtifactClient();
-            for (const chunk of chunks) {
-              const filePath = path.resolve("..", "chunks", chunk.file);
-              if (!fs.existsSync(filePath)) {
-                throw new Error("Missing audio chunk: " + filePath);
-              }
-
-              const uploaded = await client.uploadArtifact(
-                "audio-" + chunk.id,
-                [filePath],
-                path.resolve("..", "chunks"),
-                { retentionDays: 1, compressionLevel: 0 }
-              );
-              console.log("Uploaded audio-" + chunk.id + ": " + uploaded.size + " bytes");
-            }
-          }
-
-          main().catch(error => {
-            console.error(error);
-            process.exit(1);
-          });
-          NODE
-
   render:
     name: Video ${{ matrix.id }}
     runs-on: ubuntu-latest
-    needs: [prepare, publish-audio]
+    needs: prepare
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -297,10 +334,10 @@ jobs:
           name: media-image
           path: image
 
-      - name: Download this audio chunk
+      - name: Download this audio bundle
         uses: actions/download-artifact@v4
         with:
-          name: audio-${{ matrix.id }}
+          name: audio-${{ matrix.group }}
           path: audio
 
       - name: Render MP4 chunk
